@@ -1,0 +1,97 @@
+# Play! (PS2 emulator) -> iOS 10+, arm64 only, unsigned IPA/DEB
+# Put this file at .github/workflows/build-ios10.yaml
+name: Build iOS 10 arm64
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build_ios10:
+    runs-on: macos-14
+    env:
+      IOS_MIN: "10.0"
+    steps:
+    - name: Install tools
+      run: brew install dpkg ldid cmake
+
+    # Xcode 13 (last one that officially targets iOS 10) is not on any current
+    # runner. Use Xcode 15 and force the iOS 10 target; Xcode only warns about it.
+    - name: Select Xcode 15
+      run: |
+        X=$(ls -d /Applications/Xcode_15*.app 2>/dev/null | sort -V | tail -1)
+        [ -n "$X" ] && sudo xcode-select -s "$X"
+        xcodebuild -version
+    # Xcode 14.3+ dropped libarclite, linker still asks for it when target < 12.
+    # iOS 10 has native ARC, so an empty stub archive is enough.
+    - name: libarclite stub
+      run: |
+        D="$(xcode-select -p)/Toolchains/XcodeDefault.xctoolchain/usr/lib/arc"
+        sudo mkdir -p "$D"
+        for f in libarclite_iphoneos.a libarclite_iphonesimulator.a; do
+          [ -e "$D/$f" ] || printf '!<arch>\n' | sudo tee "$D/$f" >/dev/null
+        done
+
+    - name: Checkout
+      uses: actions/checkout@v4
+      with:
+        submodules: recursive
+        fetch-depth: 0
+
+    # The GitHub "Download ZIP" has empty deps/. If you pushed that zip,
+    # submodules are missing -> clone them manually.
+    - name: Fetch deps if submodules are empty
+      run: |
+        fetch() { [ -z "$(ls -A deps/$1 2>/dev/null)" ] && git clone --depth 1 --recursive "$2" deps/$1 || true; }
+        fetch Dependencies https://github.com/jpd002/Play-Dependencies.git
+        fetch Framework    https://github.com/jpd002/Play--Framework.git
+        fetch CodeGen      https://github.com/jpd002/Play--CodeGen.git
+        fetch Nuanceur     https://github.com/jpd002/Nuanceur.git
+        fetch libchdr      https://github.com/jpd002/libchdr.git
+        ls deps/Dependencies/cmake-ios
+
+    - name: Patch for iOS 10 / arm64
+      run: |
+        # 64-bit only, no armv7
+        sed -i '' 's#<string>armv7</string>#<string>arm64</string>#' Source/ui_ios/Info.plist.in
+        # minimum OS in Info.plist
+        sed -i '' 's#<key>LSRequiresIPhoneOS</key>#<key>MinimumOSVersion</key><string>10.0</string><key>LSRequiresIPhoneOS</key>#' Source/ui_ios/Info.plist.in
+
+    - name: Generate CMake project (OpenGL ES 3, no Vulkan)
+      run: |
+        mkdir build && cd build
+        cmake .. -G Xcode \
+          -DCMAKE_TOOLCHAIN_FILE=../deps/Dependencies/cmake-ios/ios.cmake \
+          -DTARGET_IOS=ON \
+          -DCMAKE_OSX_ARCHITECTURES=arm64 \
+          -DCMAKE_OSX_DEPLOYMENT_TARGET=$IOS_MIN \
+          -DCMAKE_XCODE_ATTRIBUTE_IPHONEOS_DEPLOYMENT_TARGET=$IOS_MIN \
+          -DCMAKE_XCODE_ATTRIBUTE_ONLY_ACTIVE_ARCH=NO \
+          -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED=NO \
+          -DCMAKE_CXX_FLAGS="-D_LIBCPP_DISABLE_AVAILABILITY -mios-version-min=$IOS_MIN" \
+          -DCMAKE_C_FLAGS="-mios-version-min=$IOS_MIN" \
+          -DCMAKE_EXE_LINKER_FLAGS="-Wl,-ld_classic" \
+          -DCMAKE_SHARED_LINKER_FLAGS="-Wl,-ld_classic" \
+          -DBUILD_PSFPLAYER=OFF -DBUILD_LIBRETRO_CORE=OFF
+
+    - name: Build
+      run: |
+        cd build
+        cmake --build . --config Release -- -quiet CODE_SIGNING_ALLOWED=NO
+        ldid -S Source/ui_ios/Release-iphoneos/Play.app/Play
+        lipo -info Source/ui_ios/Release-iphoneos/Play.app/Play
+        vtool -show-build Source/ui_ios/Release-iphoneos/Play.app/Play || true
+
+    - name: IPA + DEB
+      run: |
+        cd installer_ios
+        ./build_ipa.sh
+        ./build_cydia.sh
+
+    - uses: actions/upload-artifact@v4
+      with:
+        name: Play_iOS10_arm64
+        path: |
+          installer_ios/Play.ipa
+          installer_ios/Play.deb
