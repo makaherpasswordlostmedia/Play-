@@ -64,6 +64,8 @@ jobs:
         cmake .. -G Xcode \
           -DCMAKE_TOOLCHAIN_FILE=../deps/Dependencies/cmake-ios/ios.cmake \
           -DTARGET_IOS=ON \
+          -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+          -Wno-dev -Wno-deprecated \
           -DCMAKE_OSX_ARCHITECTURES=arm64 \
           -DCMAKE_OSX_DEPLOYMENT_TARGET=$IOS_MIN \
           -DCMAKE_XCODE_ATTRIBUTE_IPHONEOS_DEPLOYMENT_TARGET=$IOS_MIN \
