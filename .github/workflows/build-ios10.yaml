@@ -53,6 +53,10 @@ jobs:
 
     - name: Patch for iOS 10 / arm64
       run: |
+        # toolchain file may hardcode its own min version (that's where 11.0 came from)
+        grep -n -iE 'DEPLOYMENT|VERSION_MIN|11\.0' deps/Dependencies/cmake-ios/ios.cmake || true
+        sed -i '' -E 's/(DEPLOYMENT_TARGET[^0-9]*)1[0-9]\.[0-9]/\110.0/g; s/(version-min=)1[0-9]\.[0-9]/\110.0/g' deps/Dependencies/cmake-ios/ios.cmake
+        grep -n -iE 'DEPLOYMENT|VERSION_MIN' deps/Dependencies/cmake-ios/ios.cmake || true
         # 64-bit only, no armv7
         sed -i '' 's#<string>armv7</string>#<string>arm64</string>#' Source/ui_ios/Info.plist.in
         # minimum OS in Info.plist
@@ -80,10 +84,22 @@ jobs:
     - name: Build
       run: |
         cd build
-        cmake --build . --config Release -- -quiet CODE_SIGNING_ALLOWED=NO
-        ldid -S Source/ui_ios/Release-iphoneos/Play.app/Play
-        lipo -info Source/ui_ios/Release-iphoneos/Play.app/Play
-        vtool -show-build Source/ui_ios/Release-iphoneos/Play.app/Play || true
+        # command-line settings beat everything in the generated project
+        cmake --build . --config Release -- -quiet CODE_SIGNING_ALLOWED=NO IPHONEOS_DEPLOYMENT_TARGET=$IOS_MIN
+        APP=Source/ui_ios/Release-iphoneos/Play.app
+        # force Info.plist
+        PB=/usr/libexec/PlistBuddy
+        $PB -c "Set :MinimumOSVersion $IOS_MIN" $APP/Info.plist || $PB -c "Add :MinimumOSVersion string $IOS_MIN" $APP/Info.plist
+        # force binary min version if it still isn't 10.x
+        if ! vtool -show-build $APP/Play | grep -qE '(minos|version) 10\.'; then
+          echo "binary min OS is wrong, rewriting"
+          vtool -set-build-version ios $IOS_MIN 17.5 -replace -output $APP/Play $APP/Play
+        fi
+        ldid -S $APP/Play
+        echo "== verify =="
+        lipo -info $APP/Play
+        vtool -show-build $APP/Play
+        $PB -c "Print :MinimumOSVersion" $APP/Info.plist
 
     - name: IPA + DEB
       run: |
