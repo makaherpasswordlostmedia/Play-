@@ -89,6 +89,8 @@ jobs:
       run: |
         cd installer_ios
         ./build_ipa.sh
+        # no git tags in this repo -> `git describe` fails; use our own version
+        sed -i '' "s#\$(git describe)#0.1-ios10.${GITHUB_RUN_NUMBER}#" build_cydia.sh
         ./build_cydia.sh
 
     - uses: actions/upload-artifact@v4
